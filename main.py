@@ -22,7 +22,7 @@ start_time = {"start_time": time.time()} #keep track of the start time of the pr
 monitorDevices(down_devices)
 schedule.every(2).minutes.do(monitorDevices, down_devices) #monitor devices every 2 minutes
 schedule.every(4).weeks.do(writeReport, down_devices, start_time) #write wireless health report every 4 weeks
-schedule.every(4).weeks.do(getTime, start_time) #reset start_time
+schedule.every(4).weeks.do(setTime, start_time) #reset start_time
 
 #program will run according to schedule until program errors out or is stopped with control-C
 while True:

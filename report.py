@@ -25,7 +25,7 @@ import csv
 urllib3.disable_warnings()
 
 #set start_time to current time - this will be used to keep track of time range of the report
-def getTime(start_time):
+def setTime(start_time):
     start_time["start_time"] = time.time()
 
 
@@ -62,14 +62,25 @@ def checkNewNetworks(cur, base_url, headers, org_ids):
         networks = getAPIRequest(base_url+network_endpoint, headers)
         all_networks.extend(networks)
 
+    filter_file = open("filter.json")
+    filter_keywords = json.load(filter_file)
+    filter_file.close()
+
     api_nets = set()
     net_dict = {}
     for network in all_networks:
         net_id = network["id"]
         net_name = network["name"]
 
-        net_dict[net_id] = {"name": net_name}
-        api_nets.add(net_id)
+        add_net = True
+        for word in filter_keywords["key words"]:
+            if word in net_name:
+                add_net = False
+                break
+
+        if add_net:
+            net_dict[net_id] = {"name": net_name}
+            api_nets.add(net_id)
 
     net_query = '''SELECT id FROM site'''
     cur.execute(net_query)
@@ -79,17 +90,18 @@ def checkNewNetworks(cur, base_url, headers, org_ids):
     for net_id in net_ids:
         db_nets.add(net_id[0])
 
-    new_nets = api_nets - db_nets
+    new_net_set = api_nets - db_nets
+
+    new_nets = {}
+    for net in new_net_set:
+        new_nets[net] = net_dict[net]["name"]
 
     return new_nets
 
 
 #add new networks to the database
 def addNewNetworks(cur, new_nets):
-    for network in new_nets:
-        net_id = network
-        net_name = net_dict[net_id]["name"]
-
+    for net_id, net_name in new_nets.items():
         insert_query = '''INSERT INTO site VALUES(?, ?);'''
         cur.execute(insert_query, (net_id, net_name))
 
@@ -106,6 +118,13 @@ def checkNewDevices(cur, base_url, headers, org_ids, device_dict):
     cur.execute(device_query)
     device_macs = cur.fetchall()
 
+    site_query = "SELECT id from site"
+    cur.execute(site_query)
+    site_db = cur.fetchall()
+    site_ids = []
+    for site in site_db:
+        site_ids.append(site[0])
+
     db_devices = set()
     for mac in device_macs:
         db_devices.add(mac[0])
@@ -117,12 +136,13 @@ def checkNewDevices(cur, base_url, headers, org_ids, device_dict):
         model = device["model"]
         site_id = device["networkId"]
 
-        api_devices.add(mac)
-        device_dict[mac] = {
-            "name": name,
-            "model": model,
-            "site_id": site_id
-        }
+        if site_id in site_ids:
+            api_devices.add(mac)
+            device_dict[mac] = {
+                "name": name,
+                "model": model,
+                "site_id": site_id
+            }
 
     new_devices = api_devices - db_devices
 
@@ -159,32 +179,40 @@ def checkDeviceStatus(org_ids, base_url, headers):
                 print(e)
                 time.sleep(4)
 
-        device_statuses.extend(device_status)
+            device_statuses.extend(device_status)
 
     return device_statuses
 
 
 #if device was offline and is now online, add the start of downtime and end of downtime to the database
 def addDeviceStatus(cur, device_statuses, down_devices):
+    network_query = "SELECT id from site"
+    cur.execute(network_query)
+    site_db = cur.fetchall()
+    site_ids = []
+    for site in site_db:
+        site_ids.append(site[0])
+
     for status in device_statuses:
         name = status["status"]
         mac = status["mac"]
+        net_id = status["networkId"]
 
-        if name == "online":
-            if mac in down_devices.keys():
-                end_time = time.time()
-                start_time = down_devices[mac]["start_time"]
+        if net_id in site_ids:
+            if name == "online":
+                if mac in down_devices.keys():
+                 end_time = time.time()
+                 start_time = down_devices[mac]["start_time"]
 
-                insert_query = "INSERT INTO status(start_time, end_time, device_mac) VALUES(?, ?, ?);"
-                cur.execute(insert_query, (start_time, end_time, mac))
+                 insert_query = "INSERT INTO status(start_time, end_time, device_mac) VALUES(?, ?, ?);"
+                 cur.execute(insert_query, (start_time, end_time, mac))
 
-                del down_devices[mac]
+                 del down_devices[mac]
 
-        else:
-            if mac not in down_devices.keys():
-                start_time = time.time()
-
-                down_devices[mac] = { "start_time": start_time }
+            else:
+                if mac not in down_devices.keys():
+                    start_time = time.time()
+                    down_devices[mac] = { "start_time": start_time }
 
 
 #monitor the network devices - check if networks are in the database and add new networks to the database, check if devices are in the database and add new devices to the database, check if device statuses have changed and add new statuses to the database
@@ -229,8 +257,10 @@ def writeReport(down_devices, program_start):
     device_query = "SELECT mac, model, site_id FROM device"
     cur.execute(device_query)
     devices = cur.fetchall()
+    print("DEVICES: {}".format(devices))
 
     device_status = {}
+    print("DOWN DEVICES: {}".format(down_devices))
     for device in devices:
         mac = device[0]
         model = device[1]
@@ -239,6 +269,8 @@ def writeReport(down_devices, program_start):
         status_query = "SELECT * FROM status WHERE device_mac = ?"
         cur.execute(status_query, (mac,))
         statuses = cur.fetchall()
+
+        print("STATUSES: {}".format(statuses))
 
         total_downtime = 0
         for status in statuses:
@@ -256,32 +288,72 @@ def writeReport(down_devices, program_start):
 
 
     site_health = {}
+    print(device_status)
     for key, value in device_status.items():
         site_id = value["site"]
         model = value["model"]
+        print(model)
 
         if site_id not in site_health.keys():
             site_query = "SELECT name FROM site WHERE id = ?"
             cur.execute(site_query, (site_id,))
             site = cur.fetchall()
 
-            site_name = site[0][0]
+            if site:
+                site_name = site[0][0]
 
-            site_health[site_id] = {"name": site_name, "mx_health": 0, "ms_health": 0, "mr_health": 0}
+                site_health[site_id] = {
+                    "name": site_name,
+                    "mx_health": 0,
+                    "ms_health": 0,
+                    "mr_health": 0,
+                    "mx_count": 0,
+                    "ms_count": 0,
+                    "mr_count": 0
+                }
 
         if "MX" in model:
-            percent_down = value["downtime"] / program_duration
-            percent_health = (1 - percent_down) * 100
-            site_health[site_id]["mx_health"] += percent_health
+            site_health[site_id]["mx_health"] += value["downtime"]
+            site_health[site_id]["mx_count"] += 1
         elif "MS" in model:
-            percent_down = value["downtime"] / program_duration
-            percent_health = (1 - percent_down) * 100
-            site_health[site_id]["ms_health"] += percent_health
+            site_health[site_id]["ms_health"] += value["downtime"]
+            site_health[site_id]["ms_count"] += 1
         elif "MR" in model:
-            percent_down = value["downtime"] / program_duration
-            percent_health = (1 - percent_down) * 100
-            site_health[site_id]["mr_health"] += percent_health
+            site_health[site_id]["mr_health"] += value["downtime"]
+            site_health[site_id]["mr_count"] += 1
 
+    for site_id in site_health:
+        if site_health[site_id]["mx_count"] != 0:
+            mx_total_duration = program_duration * site_health[site_id]["mx_count"]
+            mx_percent_down = site_health[site_id]["mx_health"] / mx_total_duration
+        else:
+            print("count = 0 for some reason")
+            mx_percent_down = 1
+        print(mx_percent_down)
+
+        if site_health[site_id]["ms_count"] != 0:
+            ms_total_duration = program_duration * site_health[site_id]["ms_count"]
+            ms_percent_down = site_health[site_id]["ms_health"] / ms_total_duration
+        else:
+            print("count = 0 for some reason")
+            ms_percent_down = 1
+        print(ms_percent_down)
+
+        if site_health[site_id]["mr_count"] != 0:
+            mr_total_duration = program_duration * site_health[site_id]["mr_count"]
+            mr_percent_down = site_health[site_id]["mr_health"] / mr_total_duration
+        else:
+            print("count = 0 for some reason")
+            mr_percent_down = 1
+        print(mr_percent_down)
+
+        mx_percent_health = (1 - mx_percent_down) * 100
+        ms_percent_health = (1 - ms_percent_down) * 100
+        mr_percent_health = (1 - mr_percent_down) * 100
+
+        site_health[site_id]["mx_health"] = mx_percent_health
+        site_health[site_id]["ms_health"] = ms_percent_health
+        site_health[site_id]["mr_health"] = mr_percent_health
 
     with open('sla_report.csv', 'w') as csvfile:
         reportwriter = csv.writer(csvfile)

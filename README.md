@@ -14,6 +14,7 @@ An application utilizing Meraki Dashboard APIs to monitor the Meraki devices in 
 
 ## Prerequisites
 - **Meraki Dashboard APIs**: Enable API access in the Meraki dashboard following [these steps](https://documentation.meraki.com/General_Administration/Other_Topics/Cisco_Meraki_Dashboard_API#Enable_API_Access). Generate an API key as described in the instructions and note it down. It will be used later.
+- **Filter Keywords**: Prior to running this program, look at the Meraki networks in your organizations. Determine any of the networks that do not need to be monitored with this prototype and note their names or any key words in their names. For example, if you do not want test networks to be monitored and all your test networks have the word "test" in them, then "test" would be a key word.
 
 ## Installation/Configuration
 1. Clone this repository with `git clone https://github.com/gve-sw/gve_devnet_meraki_sla_reporting` and open the directory.
@@ -21,6 +22,12 @@ An application utilizing Meraki Dashboard APIs to monitor the Meraki devices in 
 3. Set up a Python virtual environment. Make sure Python 3 is installed in your environment, and if not, you may download Python [here](https://www.python.org/downloads). Once Python 3 is installed in your environment, you can activate the virtual environment with the instructions found [here](https://docs.python.org/3/tutorial/venv.html).
 4. Install the requirements with `pip install -r requirements.txt`
 5. The database and its tables need to be created before the prototype can be run. To set up the database, run the command `python3 db.py`
+6. (Optional) If you wish to remove any networks from this report, list any key words you determined in the Prerequisities section in the `filter.json` file. This file is a JSON object with key "key words" and a value of an array with the key words that were determined earlier.
+```
+{
+	"key words": ["key", "words", "here"]
+}
+```
 
 ## Database
 The database has three different tables: site, device, and status. The site table keeps track of the Meraki networks and has columns for the network id and network name. The device table keeps track of all the Meraki network devices and has columns for the device mac address, device name, device model, network id for the network the device is in. The status table keeps track of the times the network devices are offline. It has columns for a unique identifier for each downtime, the start time of when the device first registered as offline, the end time of when the device first registered as back online, and the mac address of the device the status is associated with.
@@ -28,12 +35,12 @@ The database has three different tables: site, device, and status. The site tabl
 ## Usage
 The functions that monitor the devices and write the report can be found in report.py. The scheduler function is in main.py. 
 
-Currently, the code is set up to monitor the Meraki devices every 2 minutes and the report is written every 4 weeks. To change the schedule times, change the code written on lines 20-22 in main.py. The scheduled time for the getTime function should always match the scheduled time for the writeReport function.
+Currently, the code is set up to monitor the Meraki devices every 2 minutes and the report is written every 4 weeks. To change the schedule times, change the code written on lines 20-22 in main.py. The scheduled time for the setTime function should always match the scheduled time for the writeReport function.
 
 ```python
 schedule.every(2).minutes.do(monitorDevices, down_devices)
 schedule.every(4).weeks.do(writeReport, down_devices, start_time)
-schedule.every(4).weeks.do(getTime, start_time)
+schedule.every(4).weeks.do(setTime, start_time)
 ```
 
 To learn more about the schedule python module, read the [documentation](https://schedule.readthedocs.io/en/stable/index.html). You can also find [examples](https://schedule.readthedocs.io/en/stable/examples.html#run-a-job-every-x-minute) of the different intervals you can schedule the jobs to run at.
