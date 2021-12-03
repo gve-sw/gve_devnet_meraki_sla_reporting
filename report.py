@@ -31,15 +31,16 @@ def setTime(start_time):
 
 #generic API GET request
 def getAPIRequest(url, headers):
-    while True:
-        try:
-            response = requests.get(url, headers=headers, verify=False)
-            resp_json = json.loads(response.text)
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        resp_json = json.loads(response.text)
 
-            return resp_json
-        except ConnectionError as e:
-            print(e)
-            time.sleep(4)
+        return resp_json
+    except Exception as e:
+        print(e)
+        time.sleep(4)
+
+        return getAPIRequest(url, headers)
 
 
 #get organization IDs from Meraki Dashboard and return list of all organization IDs
@@ -166,20 +167,12 @@ def checkDeviceStatus(org_ids, base_url, headers):
     device_statuses = []
     for org_id in org_ids:
         device_status_endpoint = "/organizations/" + org_id + "/devices/statuses"
+        device_status = getAPIRequest(base_url+device_status_endpoint, headers)
+        pprint.pprint(device_status)
+        print()
+        print()
 
-        while True:
-            try:
-                device_status = requests.get(base_url+device_status_endpoint, headers=headers, verify=False)
-                device_status = json.loads(device_status.text)
-                pprint.pprint(device_status)
-                print()
-                print()
-                break
-            except Exception as e:
-                print(e)
-                time.sleep(4)
-
-            device_statuses.extend(device_status)
+        device_statuses.extend(device_status)
 
     return device_statuses
 
@@ -248,6 +241,7 @@ def monitorDevices(down_devices):
 
 #write the SLA report - calculate the total downtime from the start of the program and find the percentage of uptime for MXs, MSs, and MRs in each network
 def writeReport(down_devices, program_start):
+    print("START TIME: {}".format(program_start["start_time"]))
     report_time = time.time()
     program_duration = report_time - program_start["start_time"]
 
@@ -257,10 +251,8 @@ def writeReport(down_devices, program_start):
     device_query = "SELECT mac, model, site_id FROM device"
     cur.execute(device_query)
     devices = cur.fetchall()
-    print("DEVICES: {}".format(devices))
 
     device_status = {}
-    print("DOWN DEVICES: {}".format(down_devices))
     for device in devices:
         mac = device[0]
         model = device[1]
@@ -270,29 +262,32 @@ def writeReport(down_devices, program_start):
         cur.execute(status_query, (mac,))
         statuses = cur.fetchall()
 
-        print("STATUSES: {}".format(statuses))
-
         total_downtime = 0
         for status in statuses:
             start_time = status[1]
             end_time = status[2]
-            if end_time > program_start["start_time"]:
+            if end_time > program_start["start_time"] and start_time > program_start["start_time"]:
                 downtime = end_time - start_time
+                total_downtime += downtime
+            elif end_time > program_start["start_time"]:
+                downtime = end_time - program_start["start_time"]
                 total_downtime += downtime
 
         if mac in down_devices.keys():
-            downtime = time.time() - down_devices[mac]["start_time"]
+            if down_devices[mac]["start_time"] > program_start["start_time"]:
+                downtime = time.time() - down_devices[mac]["start_time"]
+            else:
+                downtime = time.time() - program_start["start_time"]
+
             total_downtime += downtime
 
         device_status[mac] = {"downtime": total_downtime, "site": site_id, "model": model}
 
 
     site_health = {}
-    print(device_status)
     for key, value in device_status.items():
         site_id = value["site"]
         model = value["model"]
-        print(model)
 
         if site_id not in site_health.keys():
             site_query = "SELECT name FROM site WHERE id = ?"
@@ -326,26 +321,26 @@ def writeReport(down_devices, program_start):
         if site_health[site_id]["mx_count"] != 0:
             mx_total_duration = program_duration * site_health[site_id]["mx_count"]
             mx_percent_down = site_health[site_id]["mx_health"] / mx_total_duration
+            print("MX TOTAL TIME DOWN: {}".format(site_health[site_id]["mx_health"]))
         else:
-            print("count = 0 for some reason")
             mx_percent_down = 1
-        print(mx_percent_down)
+        print("MX PERCENT DOWN: {}".format(mx_percent_down))
 
         if site_health[site_id]["ms_count"] != 0:
             ms_total_duration = program_duration * site_health[site_id]["ms_count"]
             ms_percent_down = site_health[site_id]["ms_health"] / ms_total_duration
+            print("MS TOTAL TIME DOWN: {}".format(site_health[site_id]["ms_health"]))
         else:
-            print("count = 0 for some reason")
             ms_percent_down = 1
-        print(ms_percent_down)
+        print("MS PERCENT DOWN: {}".format(ms_percent_down))
 
         if site_health[site_id]["mr_count"] != 0:
             mr_total_duration = program_duration * site_health[site_id]["mr_count"]
             mr_percent_down = site_health[site_id]["mr_health"] / mr_total_duration
+            print("MR TOTAL TIME DOWN: {}".format(site_health[site_id]["mr_health"]))
         else:
-            print("count = 0 for some reason")
             mr_percent_down = 1
-        print(mr_percent_down)
+        print("MR PERCENT DOWN: {}".format(mr_percent_down))
 
         mx_percent_health = (1 - mx_percent_down) * 100
         ms_percent_health = (1 - ms_percent_down) * 100
